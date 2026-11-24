@@ -32,6 +32,52 @@ const createTuitions = async (req, res) => {
                 message: 'All fields are required',
             });
         }
+        const user = await db.collection('user').findOne({
+            email: req.user.email,
+        });
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+
+        if (user.role !== 'tutor') {
+            return res.status(403).json({
+                success: false,
+                message: 'Only tutors can post tuition',
+            });
+        }
+
+        if (user.subscriptionPlan === 'free') {
+            const now = new Date();
+
+            // Current month's start date
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            // Current month's end date
+            const startOfNextMonth = new Date(
+                now.getFullYear(),
+                now.getMonth() + 1,
+                1,
+            );
+            const totalTuitions = await db
+                .collection('tuitions')
+                .countDocuments({
+                    tutorEmail: user.email,
+                    createdAt: {
+                        $gte: startOfMonth,
+                        $lt: startOfNextMonth,
+                    },
+                });
+
+            if (totalTuitions >= 2) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        'Free plan allows only 2 tuition posts per month. Upgrade to Pro.',
+                });
+            }
+        }
 
         const tuitionData = {
             title,
