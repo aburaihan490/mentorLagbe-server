@@ -1,27 +1,7 @@
 import { ObjectId } from 'mongodb';
 import { db } from '../db/mongodb.js';
 
-// create tuitions post api
-const createTuitions = async (req, res) => {
-    try {
-        const response = req.body;
-
-        const result = await db.collection('tuitions').insertOne(response);
-
-        res.status(201).json({
-            success: true,
-            message: 'Tuition created successfully',
-            data: result,
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message,
-        });
-    }
-};
-
-// get All tution api
+// get All tution api (public all user see approvalStatus: 'approved',isActive: true,)
 const getAllTuitions = async (req, res) => {
     try {
         const { search, subject, class: classLevel, mode } = req.query;
@@ -90,7 +70,7 @@ const getAllTuitions = async (req, res) => {
         });
     }
 };
-
+// get single tution (public all users)
 const singleTuition = async (req, res) => {
     try {
         const { id } = req.params;
@@ -99,9 +79,11 @@ const singleTuition = async (req, res) => {
             return res.status(400).json({ message: 'Invalid book ID' });
         }
 
-        const result = await db
-            .collection('tuitions')
-            .findOne({ _id: new ObjectId(id) });
+        const result = await db.collection('tuitions').findOne({
+            _id: new ObjectId(id),
+            approvalStatus: 'approved',
+            isActive: true,
+        });
 
         if (!result) {
             return res.status(404).json({ message: 'Book not found' });
@@ -122,7 +104,6 @@ const singleTuition = async (req, res) => {
 };
 
 export const tutionController = {
-    createTuitions,
     getAllTuitions,
     singleTuition,
 };
