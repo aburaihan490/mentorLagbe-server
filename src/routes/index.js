@@ -11,6 +11,6 @@ rootRouter.use('/auth', userRouter);
 rootRouter.use('/tuition', tutionRouter);
 rootRouter.use('/tutor', tutorRouter);
 rootRouter.use('/applications', aplicationRouter);
-rootRouter.use('/payment', paymentRouts);
+rootRouter.use('/checkout', paymentRouts);
 
 export { rootRouter };

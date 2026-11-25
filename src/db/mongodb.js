@@ -1,16 +1,38 @@
 import { MongoClient } from 'mongodb';
 import { env } from '../../config/env.js';
 
-export const client = new MongoClient(`${env.DB_URI}`);
+const options = {
+    maxPoolSize: 5,
+    minPoolSize: 0,
+    maxIdleTimeMS: 60000,
+    serverSelectionTimeoutMS: 5000,
+};
 
-export const db = client.db('mentorlagbe');
+let client;
+let clientPromise;
+
+if (!globalThis._mongoClientPromise) {
+    client = new MongoClient(env.DB_URI, options);
+
+    globalThis._mongoClientPromise = client.connect();
+}
+
+clientPromise = globalThis._mongoClientPromise;
+
+export const db = clientPromise.then((client) => client.db('mentorlagbe'));
+
 export async function connectToMongoDB() {
     try {
-        await client.connect();
-        console.log('You successfully connected to MongoDB!');
-        return db;
-    } catch (err) {
-        console.dir(err);
-        throw err;
+        const connectedClient = await clientPromise;
+
+        console.log('MongoDB connected successfully!');
+
+        return connectedClient.db('mentorlagbe');
+    } catch (error) {
+        console.error('MongoDB connection error:', error);
+
+        globalThis._mongoClientPromise = null;
+
+        throw error;
     }
 }
