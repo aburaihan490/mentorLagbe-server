@@ -5,7 +5,10 @@ import { connectToMongoDB } from './src/db/mongodb.js';
 const port = env.PORT;
 
 const connect = async () => {
-    await connectToMongoDB();
+    const connect = await connectToMongoDB();
+    if (connect) {
+        console.log('You successfully connected to MongoDB!');
+    }
     app.listen(port, () => {
         console.log(`server running on http://localhost:${port}`);
     });

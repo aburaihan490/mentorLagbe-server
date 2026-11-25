@@ -1,38 +1,45 @@
 import { MongoClient } from 'mongodb';
 import { env } from '../../config/env.js';
 
-const options = {
-    maxPoolSize: 5,
-    minPoolSize: 0,
-    maxIdleTimeMS: 60000,
-    serverSelectionTimeoutMS: 5000,
-};
-
-let client;
-let clientPromise;
-
-if (!globalThis._mongoClientPromise) {
-    client = new MongoClient(env.DB_URI, options);
-
-    globalThis._mongoClientPromise = client.connect();
+if (!env.DB_URI) {
+    throw new Error('DB_URI is missing in environment variables');
 }
 
-clientPromise = globalThis._mongoClientPromise;
+const options = {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+};
 
-export const db = clientPromise.then((client) => client.db('mentorlagbe'));
+const globalForMongo = globalThis;
+
+if (!globalForMongo._mongoClient) {
+    globalForMongo._mongoClient = new MongoClient(env.DB_URI, options);
+}
+
+export const client = globalForMongo._mongoClient;
+export const db = client.db('mentorlagbe');
+
+let connectionPromise = null;
 
 export async function connectToMongoDB() {
     try {
-        const connectedClient = await clientPromise;
+        // topology closed ba disconnected hole fresh promise banano
+        if (!connectionPromise) {
+            connectionPromise = client.connect().catch((err) => {
+                connectionPromise = null;
+                throw err;
+            });
+        }
 
-        console.log('MongoDB connected successfully!');
+        await connectionPromise;
 
-        return connectedClient.db('mentorlagbe');
-    } catch (error) {
-        console.error('MongoDB connection error:', error);
-
-        globalThis._mongoClientPromise = null;
-
-        throw error;
+        // Ping check: connection alive ache kina verify kora
+        await db.command({ ping: 1 });
+        return db;
+    } catch (err) {
+        connectionPromise = null;
+        console.error('MongoDB connection error:', err);
+        throw err;
     }
 }
