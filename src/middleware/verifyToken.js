@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { env } from '../../config/env.js';
 
 export const verifyToken = async (req, res, next) => {
     try {
@@ -11,7 +12,7 @@ export const verifyToken = async (req, res, next) => {
         const token = authHeader.split(' ')[1];
 
         const JWKS = createRemoteJWKSet(
-            new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+            new URL(`${env.CLIENT_URL}/api/auth/jwks`),
         );
 
         const { payload } = await jwtVerify(token, JWKS);
