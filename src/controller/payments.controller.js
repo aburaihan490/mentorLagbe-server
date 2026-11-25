@@ -1,31 +1,38 @@
-import { env } from '../../config/env';
+import { env } from '../../config/env.js';
 import { stripe } from '../../config/strip.js';
-import { db } from '../db/mongodb';
-import { ObjectId } from 'mongodb';
+// import { db } from '../db/mongodb';
+// import { ObjectId } from 'mongodb';
 
 const checkOutPayment = async (req, res) => {
     try {
         const userId = req.user._id;
         const role = req.user.role;
 
-        // Role validation
-        const priceId = {
-            student: process.env.STRIPE_STUDENT_PRICE_ID,
-            tutor: process.env.STRIPE_TUTOR_PRICE_ID,
-        };
-        if (!priceId[role]) {
-            return res.status(403).json({
-                success: false,
-                message: 'Invalid subscription role',
-            });
-        }
+        let amount;
 
+        if (role === 'student') {
+            amount = 1000; // $10
+        } else if (role === 'tutor') {
+            amount = 1500; // $15
+        } else {
+            throw new CoustomError('Invalid role', 400);
+        }
+        //  priceId[role]
         const session = await stripe.checkout.sessions.create({
             mode: 'subscription',
 
             line_items: [
                 {
-                    price: priceId[role],
+                    price_data: {
+                        currency: 'usd',
+                        product_data: {
+                            name: `${role} Premium Subscription`,
+                        },
+                        unit_amount: amount,
+                        recurring: {
+                            interval: 'month',
+                        },
+                    },
                     quantity: 1,
                 },
             ],
@@ -35,9 +42,9 @@ const checkOutPayment = async (req, res) => {
                 role: role,
             },
 
-            success_url: `${process.env.CLIENT_URL}/premium/success`,
+            success_url: `${env.CLIENT_URL}/premium/success`,
 
-            cancel_url: `${process.env.CLIENT_URL}/premium/cancel`,
+            cancel_url: `${env.CLIENT_URL}/premium/cancel`,
         });
 
         res.status(200).json({
