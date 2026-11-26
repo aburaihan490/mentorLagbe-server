@@ -12,7 +12,7 @@ function getEnv(name) {
 export const env = {
     PORT: getEnv('PORT'),
     DB_URI: getEnv('MONGODB_URL'),
-    // Frontend origin allowed by CORS.
-    CLIENT_URL: getEnv('CLIENT_URL' || 'http://localhost:8000'),
+    CLIENT_URL: getEnv('CLIENT_URL'),
     STRIPE_SECRET_KEY: getEnv('STRIPE_SECRET_KEY'),
+    STRIPE_WEBHOOK_SECRET: getEnv('STRIPE_WEBHOOK_SECRET'),
 };

@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { env } from '../../config/env.js';
+// import { env } from '../../config/env.js';
+import 'dotenv/config';
 
 export const verifyToken = async (req, res, next) => {
     try {
@@ -8,11 +9,21 @@ export const verifyToken = async (req, res, next) => {
         if (!authHeader) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res
+                .status(401)
+                .json({ message: 'Unauthorized: Missing Bearer token' });
+        }
 
-        const token = authHeader.split(' ')[1];
+        const token = authHeader.split(' ')[1]?.trim();
+        if (!token || token === 'undefined' || token === 'null') {
+            return res
+                .status(401)
+                .json({ message: 'Unauthorized: Invalid token value' });
+        }
 
         const JWKS = createRemoteJWKSet(
-            new URL(`${env.CLIENT_URL}/api/auth/jwks`),
+            new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
         );
 
         const { payload } = await jwtVerify(token, JWKS);
@@ -20,7 +31,7 @@ export const verifyToken = async (req, res, next) => {
         next();
     } catch (error) {
         return res.status(401).json({
-            message: `'Unauthorized, Internal Server Error'${error.message}`,
+            message: `Unauthorized plz: ${error.message}`,
             error: error.message,
         });
     }

@@ -5,23 +5,23 @@ import { ObjectId } from 'mongodb';
 
 const checkOutPayment = async (req, res) => {
     try {
-        // const userId = req.user.id;
-        // const role = req.user.role;
         const { id: userId, role: userRole, email: userEmail } = req.user;
 
         let amount;
 
         if (userRole === 'student') {
-            amount = 1000; // $10
+            amount = 1000;
         } else if (userRole === 'tutor') {
-            amount = 1500; // $15
+            amount = 1500;
         } else {
-            throw new CoustomError('Invalid role', 400);
+            return { message: 'Invalid role' };
         }
-        //  priceId[role]
+
+        // Stripe Checkout Session
         const session = await stripe.checkout.sessions.create({
             mode: 'subscription',
             customer_email: userEmail,
+
             line_items: [
                 {
                     price_data: {
@@ -43,65 +43,74 @@ const checkOutPayment = async (req, res) => {
                 role: userRole,
             },
 
-            success_url: `${env.CLIENT_URL}/checkout/success`,
+            subscription_data: {
+                metadata: {
+                    userId: userId.toString(),
+                    role: userRole,
+                },
+            },
 
+            success_url: `${env.CLIENT_URL}/checkout/success`,
             cancel_url: `${env.CLIENT_URL}/checkout/cancel`,
         });
 
-        res.status(200).json({
+        // MongoDB-তে pending subscription তৈরি
+        await db.collection('subscriptions').insertOne({
+            userId: new ObjectId(userId),
+            role: userRole,
+
+            stripeCustomerId: null,
+            stripeCheckoutSessionId: session.id,
+            stripeSubscriptionId: null,
+
+            subscriptionPlan: 'premium',
+
+            amount: amount,
+            currency: 'usd',
+
+            status: 'pending',
+            paymentStatus: 'pending',
+
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        });
+
+        return res.status(200).json({
             success: true,
             url: session.url,
         });
     } catch (error) {
         console.log(error);
+
         return res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || 'Payment session creation failed',
         });
     }
 };
+// stripe listen \
+//   --forward-to http://localhost:4000/api/webhooks/stripe \
+//   --all-snapshot
 
 const stripeWebhook = async (req, res) => {
-    //    {
-    //     Stripe Dashboard-এ কোন Event enable করবে?
-    // Webhook Events
-    // checkout.session.completed
-    // Required
+    console.log('========== STRIPE WEBHOOK ==========');
 
-    // invoice.paid
-    // Required
-
-    // invoice.payment_failed
-    // Required
-
-    // customer.subscription.updated
-    // Recommended
-
-    // customer.subscription.deleted
-    // Required
-    // }
-    // After payment, Stripe sends an event here.
-    // step-1: Get the raw event body and Stripe's signature header.
-    // req.body is a Buffer (from express.raw above); constructEvent needs it unparsed.
     const stripeEvent = req.body;
     const signature = req.headers['stripe-signature'];
-    console.log('Stripe webhook reached!');
 
-    console.log('Body:', req.body);
-    console.log('Is Buffer:', Buffer.isBuffer(req.body));
-
-    console.log('Signature:', req.headers['stripe-signature']);
     let event;
-    try {
-        event = stripe.webhooks.constructEvent(
-            stripeEvent,
-            signature,
-            env.STRIPE_WEBHOOK_SECRET,
-        );
-    } catch (error) {
-        console.log('Webhook signature error:', error.message);
 
-        return res.status(400).send(`Webhook Error: ${error.message}`);
+    try {
+        const secret = env.STRIPE_WEBHOOK_SECRET;
+
+        event = stripe.webhooks.constructEvent(stripeEvent, signature, secret);
+    } catch (error) {
+        console.error('Webhook signature error:', error.message);
+
+        return res.status(400).json({
+            success: false,
+            message: error.message,
+        });
     }
 
     try {
@@ -109,20 +118,46 @@ const stripeWebhook = async (req, res) => {
             case 'checkout.session.completed': {
                 const session = event.data.object;
 
-                // Payment successful কিনা check
-                if (session.payment_status !== 'paid') {
+                console.log('Checkout completed:', session.id);
+
+                const subscriptionId =
+                    typeof session.subscription === 'string'
+                        ? session.subscription
+                        : session.subscription?.id;
+
+                const customerId =
+                    typeof session.customer === 'string'
+                        ? session.customer
+                        : session.customer?.id;
+
+                const subscription =
+                    await stripe.subscriptions.retrieve(subscriptionId);
+
+                const userId = session.metadata?.userId;
+
+                if (!userId) {
+                    console.error('User ID missing in metadata');
                     break;
                 }
 
-                const userId = session.metadata.userId;
-                const role = session.metadata.role;
-
-                // Stripe subscription retrieve
-                const subscription = await stripe.subscriptions.retrieve(
-                    session.subscription,
+                await db.collection('subscriptions').updateOne(
+                    {
+                        stripeCheckoutSessionId: session.id,
+                    },
+                    {
+                        $set: {
+                            stripeCustomerId: customerId,
+                            stripeSubscriptionId: subscriptionId,
+                            status: subscription.status,
+                            paymentStatus: 'paid',
+                            updatedAt: new Date(),
+                        },
+                    },
+                    {
+                        upsert: true,
+                    },
                 );
 
-                // 1. User collection update
                 await db.collection('user').updateOne(
                     {
                         _id: new ObjectId(userId),
@@ -135,92 +170,12 @@ const stripeWebhook = async (req, res) => {
                     },
                 );
 
-                // 2. Subscription collection save
-                await db.collection('subscriptions').updateOne(
-                    {
-                        stripeSubscriptionId: subscription.id,
-                    },
-                    {
-                        $set: {
-                            userId: new ObjectId(userId),
-                            role: role,
-
-                            stripeCustomerId: session.customer,
-                            stripeSubscriptionId: subscription.id,
-
-                            subscriptionPlan: 'premium',
-                            amount: session.amount_total,
-                            currency: session.currency,
-
-                            status: subscription.status,
-                            paymentStatus: session.payment_status,
-
-                            updatedAt: new Date(),
-                        },
-                        $setOnInsert: {
-                            createdAt: new Date(),
-                        },
-                    },
-                    { upsert: true },
-                );
-
-                console.log('User upgraded to premium');
-
-                break;
-            }
-
-            case 'invoice.paid': {
-                console.log('Subscription invoice paid');
-                const invoice = event.data.object;
-
-                const subscriptionId =
-                    typeof invoice.subscription === 'string'
-                        ? invoice.subscription
-                        : invoice.subscription?.id;
-
-                if (subscriptionId) {
-                    const subscription =
-                        await stripe.subscriptions.retrieve(subscriptionId);
-
-                    const result = await db
-                        .collection('subscriptions')
-                        .findOneAndUpdate(
-                            { stripeSubscriptionId: subscriptionId },
-                            {
-                                $set: {
-                                    paymentStatus: 'paid',
-                                    status: subscription.status,
-                                    currentPeriodStart: new Date(
-                                        subscription.current_period_start *
-                                            1000,
-                                    ),
-                                    currentPeriodEnd: new Date(
-                                        subscription.current_period_end * 1000,
-                                    ),
-                                    updatedAt: new Date(),
-                                },
-                            },
-                            { returnDocument: 'after' },
-                        );
-
-                    if (result) {
-                        await db.collection('user').updateOne(
-                            { _id: result.userId },
-                            {
-                                $set: {
-                                    subscriptionPlan: 'premium',
-                                    updatedAt: new Date(),
-                                },
-                            },
-                        );
-                    }
-                }
+                console.log('Subscription activated successfully');
 
                 break;
             }
 
             case 'invoice.payment_failed': {
-                console.log('Subscription payment failed');
                 const invoice = event.data.object;
 
                 const subscriptionId =
@@ -230,40 +185,21 @@ const stripeWebhook = async (req, res) => {
 
                 if (subscriptionId) {
                     await db.collection('subscriptions').updateOne(
-                        { stripeSubscriptionId: subscriptionId },
+                        {
+                            stripeSubscriptionId: subscriptionId,
+                        },
                         {
                             $set: {
+                                status: 'past_due',
                                 paymentStatus: 'failed',
                                 updatedAt: new Date(),
                             },
                         },
+                        {
+                            upsert: true,
+                        },
                     );
                 }
-
-                break;
-            }
-            case 'customer.subscription.updated': {
-                const subscription = event.data.object;
-
-                await db.collection('subscriptions').updateOne(
-                    {
-                        stripeSubscriptionId: subscription.id,
-                    },
-                    {
-                        $set: {
-                            status: subscription.status,
-                            cancelAtPeriodEnd:
-                                subscription.cancel_at_period_end,
-                            currentPeriodStart: new Date(
-                                subscription.current_period_start * 1000,
-                            ),
-                            currentPeriodEnd: new Date(
-                                subscription.current_period_end * 1000,
-                            ),
-                            updatedAt: new Date(),
-                        },
-                    },
-                );
 
                 break;
             }
@@ -271,61 +207,55 @@ const stripeWebhook = async (req, res) => {
             case 'customer.subscription.deleted': {
                 const subscription = event.data.object;
 
-                const result = await db.collection('subscriptions').findOne({
-                    stripeSubscriptionId: subscription.id,
-                });
-
-                if (result) {
-                    await db.collection('subscriptions').updateOne(
-                        { stripeSubscriptionId: subscription.id },
-                        {
-                            $set: {
-                                status: 'canceled',
-                                updatedAt: new Date(),
-                            },
+                await db.collection('subscriptions').updateOne(
+                    {
+                        stripeSubscriptionId: subscription.id,
+                    },
+                    {
+                        $set: {
+                            status: 'canceled',
+                            paymentStatus: 'failed',
+                            updatedAt: new Date(),
                         },
-                    );
+                    },
+                    {
+                        upsert: true,
+                    },
+                );
 
-                    const anotherActiveSubscription = await db
-                        .collection('subscriptions')
-                        .findOne({
-                            userId: result.userId,
-                            status: 'active',
-                            stripeSubscriptionId: { $ne: subscription.id },
-                        });
-
-                    if (!anotherActiveSubscription) {
-                        await db.collection('user').updateOne(
-                            {
-                                _id: result.userId,
-                                // শুধু পুরোনো subscription-এর user plan পরিবর্তন করবে না
-                            },
-                            {
-                                $set: {
-                                    subscriptionPlan: 'free',
-                                    updatedAt: new Date(),
-                                },
-                            },
-                        );
-                    }
-                }
-
-                console.log('Subscription cancelled');
+                await db.collection('user').updateOne(
+                    {
+                        _id: new ObjectId(
+                            (
+                                await db.collection('subscriptions').findOne({
+                                    stripeSubscriptionId: subscription.id,
+                                })
+                            )?.userId,
+                        ),
+                    },
+                    {
+                        $set: {
+                            subscriptionPlan: 'free',
+                        },
+                    },
+                );
 
                 break;
             }
 
             default:
-                console.log(`Unhandled event: ${event.type}`);
+                console.log('Unhandled event:', event.type);
         }
 
-        return res.status(200).json({ received: true });
+        return res.status(200).json({
+            received: true,
+        });
     } catch (error) {
-        console.log('Webhook processing error:', error);
+        console.error('Webhook processing error:', error);
 
         return res.status(500).json({
             success: false,
-            message: 'Webhook processing failed',
+            message: error.message,
         });
     }
 };
