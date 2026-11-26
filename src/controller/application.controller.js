@@ -43,6 +43,50 @@ const createApplication = async (req, res) => {
             });
         }
 
+        // Check student subscription
+        const student = await db.collection('user').findOne({
+            _id: new ObjectId(req.user.id),
+        });
+
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                message: 'Student not found',
+            });
+        }
+
+        // Free student monthly application limit
+        if (student.subscriptionPlan === 'free') {
+            const now = new Date();
+
+            // Current month start
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+            // Next month start
+            const startOfNextMonth = new Date(
+                now.getFullYear(),
+                now.getMonth() + 1,
+                1,
+            );
+
+            const totalApplications = await db
+                .collection('applications')
+                .countDocuments({
+                    studentEmail: studentEmail,
+                    appliedAt: {
+                        $gte: startOfMonth,
+                        $lt: startOfNextMonth,
+                    },
+                });
+
+            if (totalApplications >= 2) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        'Free plan allows only 2 applications per month. Upgrade to Premium for unlimited applications.',
+                });
+            }
+        }
         // Prevent duplicate application
         const existingApplication = await db
             .collection('applications')

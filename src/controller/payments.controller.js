@@ -57,6 +57,7 @@ const checkOutPayment = async (req, res) => {
         // MongoDB-তে pending subscription তৈরি
         await db.collection('subscriptions').insertOne({
             userId: new ObjectId(userId),
+            userEmail: userEmail,
             role: userRole,
 
             stripeCustomerId: null,
@@ -93,8 +94,6 @@ const checkOutPayment = async (req, res) => {
 //   --all-snapshot
 
 const stripeWebhook = async (req, res) => {
-    console.log('========== STRIPE WEBHOOK ==========');
-
     const stripeEvent = req.body;
     const signature = req.headers['stripe-signature'];
 
@@ -118,7 +117,7 @@ const stripeWebhook = async (req, res) => {
             case 'checkout.session.completed': {
                 const session = event.data.object;
 
-                console.log('Checkout completed:', session.id);
+                // console.log('Checkout completed:', session.id);
 
                 const subscriptionId =
                     typeof session.subscription === 'string'
@@ -170,7 +169,7 @@ const stripeWebhook = async (req, res) => {
                     },
                 );
 
-                console.log('Subscription activated successfully');
+                // console.log('Subscription activated successfully');
 
                 break;
             }
@@ -251,8 +250,6 @@ const stripeWebhook = async (req, res) => {
             received: true,
         });
     } catch (error) {
-        console.error('Webhook processing error:', error);
-
         return res.status(500).json({
             success: false,
             message: error.message,
@@ -260,7 +257,151 @@ const stripeWebhook = async (req, res) => {
     }
 };
 
+// get payment subscription
+const getStudentPayments = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+
+        if (!userId || !ObjectId.isValid(userId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid user ID',
+            });
+        }
+
+        const subscriptions = await db
+            .collection('subscriptions')
+            .find({
+                userId: new ObjectId(userId),
+                role: 'student',
+            })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        const totalPaid = subscriptions
+            .filter((item) => item.paymentStatus === 'paid')
+            .reduce((total, item) => total + item.amount, 0);
+
+        const pendingPayments = subscriptions
+            .filter((item) => item.paymentStatus === 'pending')
+            .reduce((total, item) => total + item.amount, 0);
+
+        const now = new Date();
+
+        const thisMonth = subscriptions
+            .filter((item) => {
+                const date = new Date(item.createdAt);
+
+                return (
+                    item.paymentStatus === 'paid' &&
+                    date.getMonth() === now.getMonth() &&
+                    date.getFullYear() === now.getFullYear()
+                );
+            })
+            .reduce((total, item) => total + item.amount, 0);
+
+        return res.status(200).json({
+            success: true,
+            summary: {
+                totalPaid,
+                pendingPayments,
+                thisMonth,
+            },
+            payments: subscriptions,
+        });
+    } catch (error) {
+        console.error('Get Student Payments Error:', error);
+
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to fetch payments',
+        });
+    }
+};
+
+// get all Transaction payment for Admin
+const getAllTransactions = async (req, res) => {
+    try {
+        // Only Admin can access
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Admin only.',
+            });
+        }
+
+        const subscriptions = db.collection('subscriptions');
+
+        const transactions = await subscriptions
+            .find({})
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        const totalTransactions = transactions.length;
+
+        const paidTransactions = transactions.filter(
+            (item) => item.paymentStatus === 'paid',
+        );
+
+        const pendingTransactions = transactions.filter(
+            (item) => item.paymentStatus === 'pending',
+        );
+
+        // Stripe amount is normally stored in cents
+        const totalRevenue = paidTransactions.reduce(
+            (total, item) => total + (item.amount || 0),
+            0,
+        );
+
+        const pendingAmount = pendingTransactions.reduce(
+            (total, item) => total + (item.amount || 0),
+            0,
+        );
+
+        const currentMonth = new Date().getMonth();
+        const currentYear = new Date().getFullYear();
+
+        const thisMonthRevenue = paidTransactions
+            .filter((item) => {
+                const date = new Date(item.createdAt);
+
+                return (
+                    date.getMonth() === currentMonth &&
+                    date.getFullYear() === currentYear
+                );
+            })
+            .reduce((total, item) => total + (item.amount || 0), 0);
+
+        res.status(200).json({
+            success: true,
+            message: 'Transactions fetched successfully',
+
+            stats: {
+                totalRevenue: totalRevenue / 100,
+                totalTransactions,
+                pendingPayments: pendingTransactions.length,
+                pendingAmount: pendingAmount / 100,
+                thisMonth: thisMonthRevenue / 100,
+            },
+
+            data: transactions.map((item) => ({
+                ...item,
+                amount: item.amount / 100,
+            })),
+        });
+    } catch (error) {
+        console.error('Get All Transactions Error:', error);
+
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch transactions',
+        });
+    }
+};
+
 export const paymentsController = {
     checkOutPayment,
     stripeWebhook,
+    getStudentPayments,
+    getAllTransactions,
 };
